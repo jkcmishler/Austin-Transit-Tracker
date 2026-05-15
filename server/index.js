@@ -171,12 +171,53 @@ async function refreshDelays() {
     items.sort((a, b) => b.delaySec - a.delaySec);
     cachedDelays = { computedAt: Date.now(), items };
     console.log(`Refreshed delays: ${items.length} trips ≥ ${DELAY_THRESHOLD_SEC / 60} min late`);
+
+    // Persist snapshot for pattern analysis (one row per currently-delayed trip)
+    if (items.length) {
+      const tx = db.transaction((rows) => {
+        for (const r of rows) insertSnapshot.run(r);
+      });
+      tx(items.map(d => ({
+        capturedAt: cachedDelays.computedAt,
+        tripId: d.tripId,
+        routeId: d.routeId,
+        nextStopId: d.nextStopId,
+        scheduledArrival: d.scheduledArrival,
+        delaySec: d.delaySec,
+      })));
+    }
   } catch (err) {
     console.error("refreshDelays error:", err.message);
   }
 }
 
 // ---- prepared statements ----
+const insertSnapshot = db.prepare(`
+  INSERT INTO delay_snapshots (captured_at, trip_id, route_id, next_stop_id, scheduled_arrival, delay_sec)
+  VALUES (@capturedAt, @tripId, @routeId, @nextStopId, @scheduledArrival, @delaySec)
+`);
+const patternForRoute = db.prepare(`
+  SELECT
+    strftime('%Y-%m-%d', captured_at / 1000, 'unixepoch', '-06:00') AS local_day,
+    COUNT(*) AS snapshots,
+    AVG(delay_sec) AS avg_delay,
+    MAX(delay_sec) AS max_delay
+  FROM delay_snapshots
+  WHERE route_id = @routeId AND captured_at >= @since
+  GROUP BY local_day
+  ORDER BY local_day DESC
+`);
+const bulkPatterns = db.prepare(`
+  SELECT
+    route_id,
+    strftime('%Y-%m-%d', captured_at / 1000, 'unixepoch', '-06:00') AS local_day,
+    COUNT(*) AS snapshots
+  FROM delay_snapshots
+  WHERE captured_at >= @since
+  GROUP BY route_id, local_day
+  HAVING snapshots >= @minPerDay
+`);
+
 const upsertFeedback = db.prepare(`
   INSERT INTO feedback (trip_id, stop_id, scheduled_arrival, value, device_id, created_at)
   VALUES (@tripId, @stopId, @scheduledArrival, @value, @deviceId, @createdAt)
@@ -222,6 +263,38 @@ app.get("/api/delays", (_req, res) => {
     computedAt: cachedDelays.computedAt,
     thresholdMin: DELAY_THRESHOLD_SEC / 60,
     items: attachFeedback(cachedDelays.items),
+  });
+});
+
+app.get("/api/patterns", (_req, res) => {
+  const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const MIN_PER_DAY = 3;
+  const rows = bulkPatterns.all({ since, minPerDay: MIN_PER_DAY });
+  const counts = new Map();
+  for (const r of rows) counts.set(r.route_id, (counts.get(r.route_id) || 0) + 1);
+  res.json({
+    windowDays: 7,
+    minSnapshotsPerDay: MIN_PER_DAY,
+    routes: Object.fromEntries(counts),
+  });
+});
+
+app.get("/api/patterns/:routeId", (req, res) => {
+  const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const days = patternForRoute.all({ routeId: req.params.routeId, since });
+  // A "late day" = had at least MIN_SNAPSHOTS_PER_DAY late readings (≥5 min)
+  const MIN_SNAPSHOTS_PER_DAY = 3;
+  const lateDays = days.filter(d => d.snapshots >= MIN_SNAPSHOTS_PER_DAY);
+  res.json({
+    routeId: req.params.routeId,
+    lateDays: lateDays.length,
+    windowDays: 7,
+    perDay: days.map(d => ({
+      day: d.local_day,
+      snapshots: d.snapshots,
+      avgDelayMin: Math.round(d.avg_delay / 60),
+      maxDelayMin: Math.round(d.max_delay / 60),
+    })),
   });
 });
 

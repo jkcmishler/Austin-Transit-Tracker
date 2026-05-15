@@ -83,6 +83,17 @@ header .tagline {
   background: var(--panel-2);
   border-bottom: 1px solid var(--border);
 }
+.route-head-info { flex: 1; min-width: 0; }
+.pattern-badge {
+  background: rgba(245, 185, 66, 0.15);
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 185, 66, 0.3);
+  white-space: nowrap;
+}
 
 .route-badge {
   min-width: 44px;

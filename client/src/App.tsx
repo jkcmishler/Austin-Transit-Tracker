@@ -41,8 +41,15 @@ function ageString(ms: number) {
   return `${Math.floor(s / 60)}m ${s % 60}s ago`;
 }
 
+type PatternsResponse = {
+  windowDays: number;
+  minSnapshotsPerDay: number;
+  routes: Record<string, number>;
+};
+
 export default function App() {
   const [data, setData] = useState<DelaysResponse | null>(null);
+  const [patterns, setPatterns] = useState<PatternsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [, setTick] = useState(0);
@@ -105,12 +112,19 @@ export default function App() {
     let cancelled = false;
     const load = async () => {
       try {
-        const r = await fetch("/api/delays");
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as DelaysResponse;
+        const [delaysRes, patternsRes] = await Promise.all([
+          fetch("/api/delays"),
+          fetch("/api/patterns"),
+        ]);
+        if (!delaysRes.ok) throw new Error(`HTTP ${delaysRes.status}`);
+        const j = (await delaysRes.json()) as DelaysResponse;
         if (!cancelled) {
           setData(j);
           setError(null);
+        }
+        if (patternsRes.ok) {
+          const p = (await patternsRes.json()) as PatternsResponse;
+          if (!cancelled) setPatterns(p);
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -147,6 +161,7 @@ export default function App() {
     return [...byRoute.entries()]
       .map(([route, delays]) => ({
         route,
+        routeId: delays[0].routeId,
         longName: delays[0].routeLongName,
         delays: delays.sort((a, b) => b.delaySec - a.delaySec),
         worstMin: delays[0].delayMin,
@@ -215,12 +230,20 @@ export default function App() {
           <section key={g.route} className="route-card">
             <div className="route-head">
               <span className="route-badge">{g.route}</span>
-              <div>
+              <div className="route-head-info">
                 <div className="route-long">{g.longName}</div>
                 <div className="route-sub">
                   {g.delays.length} delayed · worst {g.worstMin} min late
                 </div>
               </div>
+              {patterns && patterns.routes[g.routeId] >= 2 && (
+                <span
+                  className="pattern-badge"
+                  title={`Late on ${patterns.routes[g.routeId]} of the last ${patterns.windowDays} days (≥${patterns.minSnapshotsPerDay} late readings per day)`}
+                >
+                  late {patterns.routes[g.routeId]}/{patterns.windowDays}d
+                </span>
+              )}
             </div>
             <ul className="delays">
               {g.delays.map(d => {
