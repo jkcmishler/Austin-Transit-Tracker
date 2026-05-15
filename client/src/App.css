@@ -289,3 +289,37 @@ footer {
   color: var(--text);
   flex: 1;
 }
+
+/* --- feedback votes --- */
+.vote-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.vote-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.vote-btn:hover { color: var(--text); border-color: var(--accent); }
+.vote-btn.on {
+  background: rgba(52, 199, 89, 0.15);
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.vote-btn.on.bad {
+  background: rgba(255, 71, 87, 0.15);
+  border-color: var(--severe);
+  color: var(--severe);
+}
+.vote-tally {
+  font-size: 11px;
+  color: var(--muted);
+}

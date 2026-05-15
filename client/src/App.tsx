@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import RoutePicker from "./RoutePicker";
 import { loadSavedRoutes, saveSavedRoutes } from "./savedRoutes";
+import { getDeviceId } from "./deviceId";
 
 type Delay = {
   tripId: string;
@@ -15,6 +16,8 @@ type Delay = {
   delaySec: number;
   delayMin: number;
   vehicleId: string | null;
+  showedVotes: number;
+  missedVotes: number;
 };
 
 type DelaysResponse = {
@@ -48,6 +51,55 @@ export default function App() {
   const [filterMine, setFilterMine] = useState(() => loadSavedRoutes().size > 0);
 
   useEffect(() => { saveSavedRoutes(savedRoutes); }, [savedRoutes]);
+
+  // Local override of vote tallies so we don't have to wait for the next /api/delays refresh.
+  // Key: `${tripId}|${nextStopId}|${scheduledArrival}` -> { showed, missed, myVote }
+  const [localVotes, setLocalVotes] = useState<Map<string, { showed: number; missed: number; myVote: "showed" | "missed" | null }>>(new Map());
+
+  const vote = async (d: Delay, value: "showed" | "missed") => {
+    const key = `${d.tripId}|${d.nextStopId}|${d.scheduledArrival}`;
+    // Optimistic update so the UI feels instant
+    setLocalVotes(prev => {
+      const next = new Map(prev);
+      const existing = next.get(key) || { showed: d.showedVotes, missed: d.missedVotes, myVote: null };
+      let { showed, missed } = existing;
+      if (existing.myVote === "showed") showed = Math.max(0, showed - 1);
+      if (existing.myVote === "missed") missed = Math.max(0, missed - 1);
+      if (value === "showed") showed++;
+      else missed++;
+      next.set(key, { showed, missed, myVote: value });
+      return next;
+    });
+    try {
+      const r = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tripId: d.tripId,
+          stopId: d.nextStopId,
+          scheduledArrival: d.scheduledArrival,
+          value,
+          deviceId: getDeviceId(),
+        }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      setLocalVotes(prev => {
+        const next = new Map(prev);
+        next.set(key, { showed: j.showedVotes, missed: j.missedVotes, myVote: value });
+        return next;
+      });
+    } catch (err) {
+      console.error("vote failed", err);
+    }
+  };
+
+  const votesFor = (d: Delay) => {
+    const key = `${d.tripId}|${d.nextStopId}|${d.scheduledArrival}`;
+    const local = localVotes.get(key);
+    if (local) return local;
+    return { showed: d.showedVotes, missed: d.missedVotes, myVote: null as null };
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -171,20 +223,47 @@ export default function App() {
               </div>
             </div>
             <ul className="delays">
-              {g.delays.map(d => (
-                <li key={d.tripId}>
-                  <span className={`pill ${d.delayMin >= 15 ? "severe" : d.delayMin >= 10 ? "warn" : ""}`}>
-                    +{d.delayMin} min
-                  </span>
-                  <div className="stop-info">
-                    <div className="stop-name">→ {d.nextStopName}</div>
-                    <div className="stop-times">
-                      sched {formatClock(d.scheduledArrival)} · now expected {formatClock(d.predictedArrival)}
-                      {d.vehicleId && <> · bus #{d.vehicleId}</>}
+              {g.delays.map(d => {
+                const v = votesFor(d);
+                const total = v.showed + v.missed;
+                return (
+                  <li key={d.tripId}>
+                    <span className={`pill ${d.delayMin >= 15 ? "severe" : d.delayMin >= 10 ? "warn" : ""}`}>
+                      +{d.delayMin} min
+                    </span>
+                    <div className="stop-info">
+                      <div className="stop-name">→ {d.nextStopName}</div>
+                      <div className="stop-times">
+                        sched {formatClock(d.scheduledArrival)} · now expected {formatClock(d.predictedArrival)}
+                        {d.vehicleId && <> · bus #{d.vehicleId}</>}
+                      </div>
+                      <div className="vote-row">
+                        <button
+                          className={`vote-btn ${v.myVote === "showed" ? "on" : ""}`}
+                          onClick={() => vote(d, "showed")}
+                          aria-pressed={v.myVote === "showed"}
+                          title="The bus actually showed up"
+                        >
+                          👍 Showed
+                        </button>
+                        <button
+                          className={`vote-btn ${v.myVote === "missed" ? "on bad" : ""}`}
+                          onClick={() => vote(d, "missed")}
+                          aria-pressed={v.myVote === "missed"}
+                          title="Bus never came / ghost bus"
+                        >
+                          👎 No-show
+                        </button>
+                        {total > 0 && (
+                          <span className="vote-tally">
+                            {v.showed} showed · {v.missed} no-show
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           </section>
         ))}

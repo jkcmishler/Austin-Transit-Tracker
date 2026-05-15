@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import AdmZip from "adm-zip";
+import { db } from "./db.js";
 
 const PORT = process.env.PORT || 4000;
 const TRIP_UPDATES_URL = "https://data.texas.gov/download/mqtr-wwpy/application%2Foctet-stream";
@@ -175,8 +176,35 @@ async function refreshDelays() {
   }
 }
 
+// ---- prepared statements ----
+const upsertFeedback = db.prepare(`
+  INSERT INTO feedback (trip_id, stop_id, scheduled_arrival, value, device_id, created_at)
+  VALUES (@tripId, @stopId, @scheduledArrival, @value, @deviceId, @createdAt)
+  ON CONFLICT (trip_id, stop_id, scheduled_arrival, device_id) DO UPDATE
+    SET value = excluded.value, created_at = excluded.created_at
+`);
+const tallyFeedback = db.prepare(`
+  SELECT
+    SUM(CASE WHEN value = 'showed' THEN 1 ELSE 0 END) AS showed,
+    SUM(CASE WHEN value = 'missed' THEN 1 ELSE 0 END) AS missed
+  FROM feedback
+  WHERE trip_id = @tripId AND stop_id = @stopId AND scheduled_arrival = @scheduledArrival
+`);
+
+function attachFeedback(items) {
+  return items.map(d => {
+    const t = tallyFeedback.get({
+      tripId: d.tripId,
+      stopId: d.nextStopId,
+      scheduledArrival: d.scheduledArrival,
+    });
+    return { ...d, showedVotes: t?.showed || 0, missedVotes: t?.missed || 0 };
+  });
+}
+
 const app = express();
 app.use(cors());
+app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
   res.json({
@@ -193,8 +221,24 @@ app.get("/api/delays", (_req, res) => {
   res.json({
     computedAt: cachedDelays.computedAt,
     thresholdMin: DELAY_THRESHOLD_SEC / 60,
-    items: cachedDelays.items,
+    items: attachFeedback(cachedDelays.items),
   });
+});
+
+app.post("/api/feedback", (req, res) => {
+  const { tripId, stopId, scheduledArrival, value, deviceId } = req.body || {};
+  if (!tripId || !stopId || !Number.isFinite(scheduledArrival) || !deviceId) {
+    return res.status(400).json({ error: "missing fields" });
+  }
+  if (value !== "showed" && value !== "missed") {
+    return res.status(400).json({ error: "value must be 'showed' or 'missed'" });
+  }
+  upsertFeedback.run({
+    tripId, stopId, scheduledArrival, value, deviceId,
+    createdAt: Date.now(),
+  });
+  const tally = tallyFeedback.get({ tripId, stopId, scheduledArrival });
+  res.json({ ok: true, showedVotes: tally.showed || 0, missedVotes: tally.missed || 0 });
 });
 
 app.get("/api/routes", (_req, res) => {
