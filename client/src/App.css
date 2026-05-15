@@ -320,6 +320,20 @@ footer {
   color: var(--text);
   flex: 1;
 }
+.muted-id { color: var(--muted); font-size: 12px; }
+.saved-stops { margin-bottom: 8px; max-height: 200px; }
+.your-stop-badge {
+  display: inline-block;
+  margin-right: 4px;
+}
+button.route-row {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+}
+button.route-row:disabled { opacity: 0.6; cursor: default; }
 
 /* --- feedback votes --- */
 .vote-row {

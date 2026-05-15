@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import RoutePicker from "./RoutePicker";
+import StopPicker from "./StopPicker";
 import { loadSavedRoutes, saveSavedRoutes } from "./savedRoutes";
+import { loadSavedStops, saveSavedStops, type SavedStop } from "./savedStops";
 import { getDeviceId } from "./deviceId";
-import { pushSupport, subscribeToPush, unsubscribeFromPush, isSubscribed, updatePushRoutes, sendTestPush } from "./push";
+import { pushSupport, subscribeToPush, unsubscribeFromPush, isSubscribed, updatePushTargets, sendTestPush } from "./push";
 
 type Delay = {
   tripId: string;
@@ -55,10 +57,14 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [, setTick] = useState(0);
   const [savedRoutes, setSavedRoutes] = useState<Set<string>>(() => loadSavedRoutes());
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [savedStops, setSavedStops] = useState<SavedStop[]>(() => loadSavedStops());
+  const [routePickerOpen, setRoutePickerOpen] = useState(false);
+  const [stopPickerOpen, setStopPickerOpen] = useState(false);
   const [filterMine, setFilterMine] = useState(() => loadSavedRoutes().size > 0);
+  const savedStopIds = useMemo(() => new Set(savedStops.map(s => s.stopId)), [savedStops]);
 
   useEffect(() => { saveSavedRoutes(savedRoutes); }, [savedRoutes]);
+  useEffect(() => { saveSavedStops(savedStops); }, [savedStops]);
 
   // ---- push notification state ----
   const [subscribed, setSubscribed] = useState(false);
@@ -70,23 +76,25 @@ export default function App() {
     isSubscribed().then(setSubscribed);
   }, [push.supported]);
 
-  // When the user changes their saved routes AND they're already subscribed,
-  // push the new route list to the server so notifications target the right routes.
+  // When the user changes saved routes or stops while subscribed,
+  // re-target the server-side subscription so push fan-out hits the right rows.
   useEffect(() => {
-    if (subscribed) updatePushRoutes([...savedRoutes]);
-  }, [savedRoutes, subscribed]);
+    if (subscribed) updatePushTargets([...savedRoutes], savedStops.map(s => s.stopId));
+  }, [savedRoutes, savedStops, subscribed]);
 
   const handleSubscribe = async () => {
     if (savedRoutes.size === 0) {
       setPushMsg("Pick at least one route first — that's what we'll notify you about.");
-      setPickerOpen(true);
+      setRoutePickerOpen(true);
       return;
     }
     setPushMsg("Requesting permission…");
-    const res = await subscribeToPush([...savedRoutes]);
+    const res = await subscribeToPush([...savedRoutes], savedStops.map(s => s.stopId));
     if (res.ok) {
       setSubscribed(true);
-      setPushMsg("You'll get a notification when one of your routes runs late.");
+      setPushMsg(savedStops.length > 0
+        ? `You'll get a notification only when one of your routes is late approaching one of your ${savedStops.length} saved ${savedStops.length === 1 ? "stop" : "stops"}.`
+        : "You'll get a notification when one of your routes runs late.");
     } else {
       setPushMsg(res.message || "Couldn't enable notifications.");
     }
@@ -228,8 +236,11 @@ export default function App() {
       </header>
 
       <div className="toolbar">
-        <button className="btn" onClick={() => setPickerOpen(true)}>
+        <button className="btn" onClick={() => setRoutePickerOpen(true)}>
           {savedRoutes.size === 0 ? "Pick your routes" : `My routes (${savedRoutes.size})`}
+        </button>
+        <button className="btn btn-outline" onClick={() => setStopPickerOpen(true)}>
+          {savedStops.length === 0 ? "+ Stops" : `My stops (${savedStops.length})`}
         </button>
         {showMineToggle && (
           <label className="toggle">
@@ -319,7 +330,10 @@ export default function App() {
                       +{d.delayMin} min
                     </span>
                     <div className="stop-info">
-                      <div className="stop-name">→ {d.nextStopName}</div>
+                      <div className="stop-name">
+                        {savedStopIds.has(d.nextStopId) && <span className="your-stop-badge" title="Your saved stop">📍</span>}
+                        → {d.nextStopName}
+                      </div>
                       <div className="stop-times">
                         sched {formatClock(d.scheduledArrival)} · now expected {formatClock(d.predictedArrival)}
                         {d.vehicleId && <> · bus #{d.vehicleId}</>}
@@ -361,14 +375,20 @@ export default function App() {
       </footer>
 
       <RoutePicker
-        open={pickerOpen}
+        open={routePickerOpen}
         selected={savedRoutes}
-        onClose={() => setPickerOpen(false)}
+        onClose={() => setRoutePickerOpen(false)}
         onChange={(next) => {
           setSavedRoutes(next);
           if (next.size === 0) setFilterMine(false);
           else if (!filterMine) setFilterMine(true);
         }}
+      />
+      <StopPicker
+        open={stopPickerOpen}
+        selected={savedStops}
+        onClose={() => setStopPickerOpen(false)}
+        onChange={setSavedStops}
       />
     </div>
   );

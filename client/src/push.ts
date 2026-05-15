@@ -27,7 +27,7 @@ export async function ensureSwRegistered(): Promise<ServiceWorkerRegistration> {
   return navigator.serviceWorker.register("/sw.js");
 }
 
-export async function subscribeToPush(routeIds: string[]): Promise<{ ok: boolean; message?: string }> {
+export async function subscribeToPush(routeIds: string[], stopIds: string[]): Promise<{ ok: boolean; message?: string }> {
   const sup = pushSupport();
   if (!sup.supported) return { ok: false, message: sup.reason };
 
@@ -56,18 +56,19 @@ export async function subscribeToPush(routeIds: string[]): Promise<{ ok: boolean
       deviceId: getDeviceId(),
       subscription: sub.toJSON(),
       routeIds,
+      stopIds,
     }),
   });
   if (!r.ok) return { ok: false, message: `Server returned ${r.status}` };
   return { ok: true };
 }
 
-export async function updatePushRoutes(routeIds: string[]) {
+export async function updatePushTargets(routeIds: string[], stopIds: string[]) {
   try {
     await fetch("/api/push/update-routes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deviceId: getDeviceId(), routeIds }),
+      body: JSON.stringify({ deviceId: getDeviceId(), routeIds, stopIds }),
     });
   } catch { /* swallow — best effort */ }
 }

@@ -201,19 +201,27 @@ async function sendPushNotifications(delayedItems) {
   if (!subs.length) return;
 
   for (const sub of subs) {
-    let routeIds;
-    try { routeIds = JSON.parse(sub.route_ids); } catch { continue; }
+    let routeIds, stopIds;
+    try {
+      routeIds = JSON.parse(sub.route_ids);
+      stopIds = JSON.parse(sub.stop_ids || "[]");
+    } catch { continue; }
     if (!Array.isArray(routeIds) || !routeIds.length) continue;
-    const watching = new Set(routeIds);
+    const watchingRoutes = new Set(routeIds);
+    const watchingStops = new Set(Array.isArray(stopIds) ? stopIds : []);
 
     // For each delayed trip on a watched route, send one notification per trip per device (ever).
+    // If the user has saved stops, only notify when the delay's next stop is one of them —
+    // dramatically reduces noise from "your route is late somewhere far from you."
     for (const d of delayedItems) {
-      if (!watching.has(d.routeId)) continue;
+      if (!watchingRoutes.has(d.routeId)) continue;
+      if (watchingStops.size > 0 && !watchingStops.has(d.nextStopId)) continue;
       if (hasSentPush.get(d.tripId, sub.device_id)) continue;
 
+      const yourStop = watchingStops.has(d.nextStopId);
       const payload = JSON.stringify({
         title: `Route ${d.routeShortName} is ${d.delayMin} min late`,
-        body: `Next stop: ${d.nextStopName} — expected ${new Date(d.predictedArrival * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`,
+        body: `${yourStop ? "📍 Your stop: " : ""}${d.nextStopName} — expected ${new Date(d.predictedArrival * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`,
         url: "/",
         tag: `route-${d.routeId}`,
       });
@@ -267,17 +275,20 @@ const bulkPatterns = db.prepare(`
 const subscriptionByDevice = db.prepare(`SELECT * FROM push_subscriptions WHERE device_id = ?`);
 
 const upsertSubscription = db.prepare(`
-  INSERT INTO push_subscriptions (device_id, endpoint, p256dh, auth, route_ids, created_at, updated_at)
-  VALUES (@deviceId, @endpoint, @p256dh, @auth, @routeIds, @now, @now)
+  INSERT INTO push_subscriptions (device_id, endpoint, p256dh, auth, route_ids, stop_ids, created_at, updated_at)
+  VALUES (@deviceId, @endpoint, @p256dh, @auth, @routeIds, @stopIds, @now, @now)
   ON CONFLICT (device_id) DO UPDATE SET
     endpoint = excluded.endpoint,
     p256dh = excluded.p256dh,
     auth = excluded.auth,
     route_ids = excluded.route_ids,
+    stop_ids = excluded.stop_ids,
     updated_at = excluded.updated_at
 `);
-const updateSubscriptionRoutes = db.prepare(`
-  UPDATE push_subscriptions SET route_ids = @routeIds, updated_at = @now WHERE device_id = @deviceId
+const updateSubscriptionTargets = db.prepare(`
+  UPDATE push_subscriptions
+  SET route_ids = @routeIds, stop_ids = @stopIds, updated_at = @now
+  WHERE device_id = @deviceId
 `);
 const deleteSubscription = db.prepare(`DELETE FROM push_subscriptions WHERE device_id = ?`);
 const allSubscriptions = db.prepare(`SELECT * FROM push_subscriptions`);
@@ -373,32 +384,38 @@ app.get("/api/push/vapid-public-key", (_req, res) => {
 
 app.post("/api/push/subscribe", (req, res) => {
   if (!PUSH_ENABLED) return res.status(503).json({ error: "push disabled" });
-  const { deviceId, subscription, routeIds } = req.body || {};
+  const { deviceId, subscription, routeIds, stopIds } = req.body || {};
   if (!deviceId || !subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
     return res.status(400).json({ error: "missing fields" });
   }
   const routes = Array.isArray(routeIds) ? routeIds.filter(r => typeof r === "string") : [];
+  const stops = Array.isArray(stopIds) ? stopIds.filter(s => typeof s === "string") : [];
   upsertSubscription.run({
     deviceId,
     endpoint: subscription.endpoint,
     p256dh: subscription.keys.p256dh,
     auth: subscription.keys.auth,
     routeIds: JSON.stringify(routes),
+    stopIds: JSON.stringify(stops),
     now: Date.now(),
   });
-  res.json({ ok: true, watching: routes.length });
+  res.json({ ok: true, watching: { routes: routes.length, stops: stops.length } });
 });
 
 app.post("/api/push/update-routes", (req, res) => {
   if (!PUSH_ENABLED) return res.status(503).json({ error: "push disabled" });
-  const { deviceId, routeIds } = req.body || {};
+  const { deviceId, routeIds, stopIds } = req.body || {};
   if (!deviceId) return res.status(400).json({ error: "missing deviceId" });
   const routes = Array.isArray(routeIds) ? routeIds.filter(r => typeof r === "string") : [];
-  const result = updateSubscriptionRoutes.run({
-    deviceId, routeIds: JSON.stringify(routes), now: Date.now(),
+  const stops = Array.isArray(stopIds) ? stopIds.filter(s => typeof s === "string") : [];
+  const result = updateSubscriptionTargets.run({
+    deviceId,
+    routeIds: JSON.stringify(routes),
+    stopIds: JSON.stringify(stops),
+    now: Date.now(),
   });
   if (result.changes === 0) return res.status(404).json({ error: "not subscribed" });
-  res.json({ ok: true, watching: routes.length });
+  res.json({ ok: true, watching: { routes: routes.length, stops: stops.length } });
 });
 
 app.post("/api/push/test", async (req, res) => {
@@ -449,6 +466,29 @@ app.post("/api/feedback", (req, res) => {
   });
   const tally = tallyFeedback.get({ tripId, stopId, scheduledArrival });
   res.json({ ok: true, showedVotes: tally.showed || 0, missedVotes: tally.missed || 0 });
+});
+
+app.get("/api/stops", (req, res) => {
+  const q = (req.query.q || "").toString().trim().toLowerCase();
+  const ids = (req.query.ids || "").toString().trim();
+  if (ids) {
+    // Bulk lookup by ID — used to hydrate localStorage-saved stop names.
+    const wanted = ids.split(",").map(s => s.trim()).filter(Boolean).slice(0, 200);
+    return res.json({
+      items: wanted
+        .filter(id => stopsById.has(id))
+        .map(id => ({ stopId: id, name: stopsById.get(id).name })),
+    });
+  }
+  if (!q || q.length < 2) return res.json({ items: [] });
+  const out = [];
+  for (const [id, s] of stopsById) {
+    if (s.name.toLowerCase().includes(q) || id.toLowerCase().includes(q)) {
+      out.push({ stopId: id, name: s.name });
+      if (out.length >= 50) break;
+    }
+  }
+  res.json({ items: out });
 });
 
 app.get("/api/routes", (_req, res) => {
