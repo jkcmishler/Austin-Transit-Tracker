@@ -35,4 +35,21 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_snapshots_route_time
     ON delay_snapshots (route_id, captured_at);
+
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    device_id TEXT PRIMARY KEY,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    route_ids TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS push_sent (
+    trip_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    sent_at INTEGER NOT NULL,
+    PRIMARY KEY (trip_id, device_id)
+  );
 `);

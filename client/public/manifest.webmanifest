@@ -1,0 +1,12 @@
+{
+  "name": "Austin Transit Tracker",
+  "short_name": "Transit ATX",
+  "description": "CapMetro buses and trains running 5+ minutes late, right now.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1115",
+  "theme_color": "#ff7a45",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

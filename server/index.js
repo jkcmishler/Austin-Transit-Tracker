@@ -1,7 +1,19 @@
 import express from "express";
 import cors from "cors";
 import AdmZip from "adm-zip";
+import webpush from "web-push";
 import { db } from "./db.js";
+
+const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY || "";
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || "";
+const VAPID_CONTACT = process.env.VAPID_CONTACT || "mailto:dev@example.com";
+const PUSH_ENABLED = Boolean(VAPID_PUBLIC && VAPID_PRIVATE);
+if (PUSH_ENABLED) {
+  webpush.setVapidDetails(VAPID_CONTACT, VAPID_PUBLIC, VAPID_PRIVATE);
+  console.log("Web push enabled.");
+} else {
+  console.log("Web push disabled (VAPID keys not set).");
+}
 
 const PORT = process.env.PORT || 4000;
 const TRIP_UPDATES_URL = "https://data.texas.gov/download/mqtr-wwpy/application%2Foctet-stream";
@@ -186,8 +198,51 @@ async function refreshDelays() {
         delaySec: d.delaySec,
       })));
     }
+
+    if (PUSH_ENABLED) await sendPushNotifications(items);
   } catch (err) {
     console.error("refreshDelays error:", err.message);
+  }
+}
+
+async function sendPushNotifications(delayedItems) {
+  const subs = allSubscriptions.all();
+  if (!subs.length) return;
+
+  for (const sub of subs) {
+    let routeIds;
+    try { routeIds = JSON.parse(sub.route_ids); } catch { continue; }
+    if (!Array.isArray(routeIds) || !routeIds.length) continue;
+    const watching = new Set(routeIds);
+
+    // For each delayed trip on a watched route, send one notification per trip per device (ever).
+    for (const d of delayedItems) {
+      if (!watching.has(d.routeId)) continue;
+      if (hasSentPush.get(d.tripId, sub.device_id)) continue;
+
+      const payload = JSON.stringify({
+        title: `Route ${d.routeShortName} is ${d.delayMin} min late`,
+        body: `Next stop: ${d.nextStopName} — expected ${new Date(d.predictedArrival * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`,
+        url: "/",
+        tag: `route-${d.routeId}`,
+      });
+
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          payload,
+        );
+        recordSentPush.run(d.tripId, sub.device_id, Date.now());
+      } catch (err) {
+        // 404/410 = subscription gone; clean up
+        if (err.statusCode === 404 || err.statusCode === 410) {
+          deleteSubscription.run(sub.device_id);
+          console.log(`Removed dead subscription ${sub.device_id}`);
+          break; // sub is gone, skip remaining items for this device
+        }
+        console.error(`Push error for ${sub.device_id}:`, err.statusCode || err.message);
+      }
+    }
   }
 }
 
@@ -216,6 +271,26 @@ const bulkPatterns = db.prepare(`
   WHERE captured_at >= @since
   GROUP BY route_id, local_day
   HAVING snapshots >= @minPerDay
+`);
+
+const upsertSubscription = db.prepare(`
+  INSERT INTO push_subscriptions (device_id, endpoint, p256dh, auth, route_ids, created_at, updated_at)
+  VALUES (@deviceId, @endpoint, @p256dh, @auth, @routeIds, @now, @now)
+  ON CONFLICT (device_id) DO UPDATE SET
+    endpoint = excluded.endpoint,
+    p256dh = excluded.p256dh,
+    auth = excluded.auth,
+    route_ids = excluded.route_ids,
+    updated_at = excluded.updated_at
+`);
+const updateSubscriptionRoutes = db.prepare(`
+  UPDATE push_subscriptions SET route_ids = @routeIds, updated_at = @now WHERE device_id = @deviceId
+`);
+const deleteSubscription = db.prepare(`DELETE FROM push_subscriptions WHERE device_id = ?`);
+const allSubscriptions = db.prepare(`SELECT * FROM push_subscriptions`);
+const hasSentPush = db.prepare(`SELECT 1 FROM push_sent WHERE trip_id = ? AND device_id = ?`);
+const recordSentPush = db.prepare(`
+  INSERT OR IGNORE INTO push_sent (trip_id, device_id, sent_at) VALUES (?, ?, ?)
 `);
 
 const upsertFeedback = db.prepare(`
@@ -296,6 +371,48 @@ app.get("/api/patterns/:routeId", (req, res) => {
       maxDelayMin: Math.round(d.max_delay / 60),
     })),
   });
+});
+
+app.get("/api/push/vapid-public-key", (_req, res) => {
+  if (!PUSH_ENABLED) return res.status(503).json({ error: "push disabled" });
+  res.json({ key: VAPID_PUBLIC });
+});
+
+app.post("/api/push/subscribe", (req, res) => {
+  if (!PUSH_ENABLED) return res.status(503).json({ error: "push disabled" });
+  const { deviceId, subscription, routeIds } = req.body || {};
+  if (!deviceId || !subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+    return res.status(400).json({ error: "missing fields" });
+  }
+  const routes = Array.isArray(routeIds) ? routeIds.filter(r => typeof r === "string") : [];
+  upsertSubscription.run({
+    deviceId,
+    endpoint: subscription.endpoint,
+    p256dh: subscription.keys.p256dh,
+    auth: subscription.keys.auth,
+    routeIds: JSON.stringify(routes),
+    now: Date.now(),
+  });
+  res.json({ ok: true, watching: routes.length });
+});
+
+app.post("/api/push/update-routes", (req, res) => {
+  if (!PUSH_ENABLED) return res.status(503).json({ error: "push disabled" });
+  const { deviceId, routeIds } = req.body || {};
+  if (!deviceId) return res.status(400).json({ error: "missing deviceId" });
+  const routes = Array.isArray(routeIds) ? routeIds.filter(r => typeof r === "string") : [];
+  const result = updateSubscriptionRoutes.run({
+    deviceId, routeIds: JSON.stringify(routes), now: Date.now(),
+  });
+  if (result.changes === 0) return res.status(404).json({ error: "not subscribed" });
+  res.json({ ok: true, watching: routes.length });
+});
+
+app.post("/api/push/unsubscribe", (req, res) => {
+  const { deviceId } = req.body || {};
+  if (!deviceId) return res.status(400).json({ error: "missing deviceId" });
+  deleteSubscription.run(deviceId);
+  res.json({ ok: true });
 });
 
 app.post("/api/feedback", (req, res) => {

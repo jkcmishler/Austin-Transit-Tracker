@@ -3,6 +3,7 @@ import "./App.css";
 import RoutePicker from "./RoutePicker";
 import { loadSavedRoutes, saveSavedRoutes } from "./savedRoutes";
 import { getDeviceId } from "./deviceId";
+import { pushSupport, subscribeToPush, unsubscribeFromPush, isSubscribed, updatePushRoutes } from "./push";
 
 type Delay = {
   tripId: string;
@@ -58,6 +59,44 @@ export default function App() {
   const [filterMine, setFilterMine] = useState(() => loadSavedRoutes().size > 0);
 
   useEffect(() => { saveSavedRoutes(savedRoutes); }, [savedRoutes]);
+
+  // ---- push notification state ----
+  const [subscribed, setSubscribed] = useState(false);
+  const [pushMsg, setPushMsg] = useState<string | null>(null);
+  const push = pushSupport();
+
+  useEffect(() => {
+    if (!push.supported) return;
+    isSubscribed().then(setSubscribed);
+  }, [push.supported]);
+
+  // When the user changes their saved routes AND they're already subscribed,
+  // push the new route list to the server so notifications target the right routes.
+  useEffect(() => {
+    if (subscribed) updatePushRoutes([...savedRoutes]);
+  }, [savedRoutes, subscribed]);
+
+  const handleSubscribe = async () => {
+    if (savedRoutes.size === 0) {
+      setPushMsg("Pick at least one route first — that's what we'll notify you about.");
+      setPickerOpen(true);
+      return;
+    }
+    setPushMsg("Requesting permission…");
+    const res = await subscribeToPush([...savedRoutes]);
+    if (res.ok) {
+      setSubscribed(true);
+      setPushMsg("You'll get a notification when one of your routes runs late.");
+    } else {
+      setPushMsg(res.message || "Couldn't enable notifications.");
+    }
+  };
+
+  const handleUnsubscribe = async () => {
+    await unsubscribeFromPush();
+    setSubscribed(false);
+    setPushMsg("Notifications off.");
+  };
 
   // Local override of vote tallies so we don't have to wait for the next /api/delays refresh.
   // Key: `${tripId}|${nextStopId}|${scheduledArrival}` -> { showed, missed, myVote }
@@ -194,7 +233,19 @@ export default function App() {
             Show only mine
           </label>
         )}
+        {push.supported && (
+          subscribed ? (
+            <button className="btn btn-ghost" onClick={handleUnsubscribe}>
+              🔔 Notifications on
+            </button>
+          ) : (
+            <button className="btn btn-outline" onClick={handleSubscribe}>
+              🔕 Notify me when late
+            </button>
+          )
+        )}
       </div>
+      {pushMsg && <div className="push-msg">{pushMsg}</div>}
 
       <div className="status">
         {loading && <span>Loading…</span>}
