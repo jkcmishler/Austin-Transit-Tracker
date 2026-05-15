@@ -18,6 +18,7 @@ if (PUSH_ENABLED) {
 
 const PORT = process.env.PORT || 4000;
 const TRIP_UPDATES_URL = "https://data.texas.gov/download/mqtr-wwpy/application%2Foctet-stream";
+const VEHICLE_POSITIONS_URL = "https://data.texas.gov/download/cuc7-ywmd/application%2Foctet-stream";
 const STATIC_GTFS_URL = "https://data.texas.gov/download/r4v4-vz24/application%2Fzip";
 const TRIP_UPDATES_REFRESH_MS = 30_000;
 const STATIC_GTFS_REFRESH_MS = 6 * 60 * 60 * 1000; // 6h
@@ -32,6 +33,7 @@ let routesById = new Map();
 let stopsById = new Map();
 
 let cachedDelays = { computedAt: 0, items: [] };
+let cachedVehicles = { computedAt: 0, items: [] };
 
 function parseCsv(text) {
   const rows = [];
@@ -193,6 +195,44 @@ async function refreshDelays() {
     if (PUSH_ENABLED) await sendPushNotifications(items);
   } catch (err) {
     console.error("refreshDelays error:", err.message);
+  }
+}
+
+async function refreshVehicles() {
+  try {
+    const resp = await fetch(VEHICLE_POSITIONS_URL);
+    if (!resp.ok) throw new Error(`vehicle-positions ${resp.status}`);
+    const feed = await resp.json();
+    // Build a tripId -> delay map from the most recent cachedDelays so we can mark
+    // delayed vehicles without a second join trip in the client.
+    const delayByTrip = new Map();
+    for (const d of cachedDelays.items) delayByTrip.set(d.tripId, d.delayMin);
+
+    const items = [];
+    for (const entity of feed.entity || []) {
+      const v = entity.vehicle;
+      const pos = v?.position;
+      if (!pos || typeof pos.latitude !== "number" || typeof pos.longitude !== "number") continue;
+      const trip = v.trip || {};
+      const route = routesById.get(trip.routeId);
+      items.push({
+        vehicleId: v.vehicle?.id || entity.id,
+        lat: pos.latitude,
+        lng: pos.longitude,
+        bearing: pos.bearing ?? null,
+        speed: pos.speed ?? null,
+        tripId: trip.tripId || null,
+        routeId: trip.routeId || null,
+        routeShortName: route?.shortName || trip.routeId || "",
+        routeLongName: route?.longName || "",
+        currentStatus: v.currentStatus || null,
+        delayMin: trip.tripId ? (delayByTrip.get(trip.tripId) ?? null) : null,
+        timestamp: Number(v.timestamp) || null,
+      });
+    }
+    cachedVehicles = { computedAt: Date.now(), items };
+  } catch (err) {
+    console.error("refreshVehicles error:", err.message);
   }
 }
 
@@ -468,6 +508,13 @@ app.post("/api/feedback", (req, res) => {
   res.json({ ok: true, showedVotes: tally.showed || 0, missedVotes: tally.missed || 0 });
 });
 
+app.get("/api/vehicles", (_req, res) => {
+  res.json({
+    computedAt: cachedVehicles.computedAt,
+    items: cachedVehicles.items,
+  });
+});
+
 app.get("/api/stops", (req, res) => {
   const q = (req.query.q || "").toString().trim().toLowerCase();
   const ids = (req.query.ids || "").toString().trim();
@@ -513,7 +560,9 @@ app.get("/api/routes", (_req, res) => {
 async function start() {
   await loadStaticGtfs();
   await refreshDelays();
+  await refreshVehicles();
   setInterval(refreshDelays, TRIP_UPDATES_REFRESH_MS);
+  setInterval(refreshVehicles, TRIP_UPDATES_REFRESH_MS);
   setInterval(() => { loadStaticGtfs().catch(e => console.error("static reload:", e.message)); },
     STATIC_GTFS_REFRESH_MS);
   app.listen(PORT, () => console.log(`Server on http://localhost:${PORT}`));

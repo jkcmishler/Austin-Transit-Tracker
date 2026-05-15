@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import RoutePicker from "./RoutePicker";
 import StopPicker from "./StopPicker";
+import MapView from "./MapView";
 import { loadSavedRoutes, saveSavedRoutes } from "./savedRoutes";
 import { loadSavedStops, saveSavedStops, type SavedStop } from "./savedStops";
 import { getDeviceId } from "./deviceId";
@@ -60,6 +61,7 @@ export default function App() {
   const [savedStops, setSavedStops] = useState<SavedStop[]>(() => loadSavedStops());
   const [routePickerOpen, setRoutePickerOpen] = useState(false);
   const [stopPickerOpen, setStopPickerOpen] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
   const [filterMine, setFilterMine] = useState(() => loadSavedRoutes().size > 0);
   const savedStopIds = useMemo(() => new Set(savedStops.map(s => s.stopId)), [savedStops]);
 
@@ -228,6 +230,15 @@ export default function App() {
   const visible = visibleItems.length;
   const total = data?.items.length ?? 0;
 
+  if (mapOpen) {
+    return (
+      <MapView
+        filterRouteIds={filterMine ? savedRoutes : new Set()}
+        onClose={() => setMapOpen(false)}
+      />
+    );
+  }
+
   return (
     <div className="app">
       <header>
@@ -241,6 +252,9 @@ export default function App() {
         </button>
         <button className="btn btn-outline" onClick={() => setStopPickerOpen(true)}>
           {savedStops.length === 0 ? "+ Stops" : `My stops (${savedStops.length})`}
+        </button>
+        <button className="btn btn-outline" onClick={() => setMapOpen(true)}>
+          🗺 Map
         </button>
         {showMineToggle && (
           <label className="toggle">
