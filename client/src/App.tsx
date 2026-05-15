@@ -45,6 +45,25 @@ function ageString(ms: number) {
   return `${Math.floor(s / 60)}m ${s % 60}s ago`;
 }
 
+function formatNowStrip(d: Date) {
+  // "FRI 15 MAY · 14:32 CDT"
+  const day = d.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase();
+  const date = d.toLocaleDateString("en-US", { day: "2-digit", month: "short" }).toUpperCase();
+  const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+  // Try to extract the local TZ abbreviation
+  const tz = (() => {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZoneName: "short" }).formatToParts(d);
+    return parts.find(p => p.type === "timeZoneName")?.value ?? "";
+  })();
+  return { day, date, time, tz };
+}
+
+function severityClass(min: number) {
+  if (min >= 15) return "severe";
+  if (min >= 10) return "warn";
+  return "";
+}
+
 type PatternsResponse = {
   windowDays: number;
   minSnapshotsPerDay: number;
@@ -239,61 +258,89 @@ export default function App() {
     );
   }
 
+  const now = new Date();
+  const strip = formatNowStrip(now);
+
   return (
     <div className="app">
-      <header>
-        <h1>Austin Transit Tracker</h1>
-        <p className="tagline">CapMetro buses & trains running 5+ minutes late, right now</p>
+      <div className="top-strip">
+        <div className="left">
+          <span className="live">LIVE</span>
+          <span>Austin Transit · Departure Board</span>
+        </div>
+        <div className="right tabular">
+          <span>{strip.day} {strip.date}</span>
+          <span>{strip.time} {strip.tz}</span>
+        </div>
+      </div>
+
+      <header className="masthead">
+        <h1>
+          Running <span className="late">late</span><span className="period">.</span>
+        </h1>
+        <div className="by-line">
+          <strong>CAPMETRO</strong>
+          <span className="dot">●</span>
+          <span>Five-plus minutes behind schedule, refreshed every thirty seconds.</span>
+        </div>
       </header>
 
       <div className="toolbar">
-        <button className="btn" onClick={() => setRoutePickerOpen(true)}>
-          {savedRoutes.size === 0 ? "Pick your routes" : `My routes (${savedRoutes.size})`}
-        </button>
-        <button className="btn btn-outline" onClick={() => setStopPickerOpen(true)}>
-          {savedStops.length === 0 ? "+ Stops" : `My stops (${savedStops.length})`}
-        </button>
-        <button className="btn btn-outline" onClick={() => setMapOpen(true)}>
-          🗺 Map
-        </button>
-        {showMineToggle && (
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={filterMine}
-              onChange={e => setFilterMine(e.target.checked)}
-            />
-            Show only mine
-          </label>
-        )}
+        <div className="group">
+          <button className="btn" onClick={() => setRoutePickerOpen(true)}>
+            {savedRoutes.size === 0 ? "Routes" : `Routes · ${savedRoutes.size}`}
+          </button>
+          <button className="btn btn-outline" onClick={() => setStopPickerOpen(true)}>
+            {savedStops.length === 0 ? "Stops" : `Stops · ${savedStops.length}`}
+          </button>
+        </div>
+        <div className="group">
+          <button className="btn btn-outline" onClick={() => setMapOpen(true)}>
+            Map
+          </button>
+          {showMineToggle && (
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={filterMine}
+                onChange={e => setFilterMine(e.target.checked)}
+              />
+              Only mine
+            </label>
+          )}
+        </div>
         {push.supported && (
-          subscribed ? (
-            <>
-              <button className="btn btn-ghost" onClick={handleUnsubscribe}>
-                🔔 Notifications on
+          <div className="group">
+            {subscribed ? (
+              <>
+                <button className="btn btn-ghost" onClick={handleUnsubscribe}>
+                  Notifications · On
+                </button>
+                <button className="link-btn" onClick={handleTestPush}>
+                  Send test
+                </button>
+              </>
+            ) : (
+              <button className="btn btn-outline" onClick={handleSubscribe}>
+                Notify me
               </button>
-              <button className="link-btn" onClick={handleTestPush}>
-                Send test
-              </button>
-            </>
-          ) : (
-            <button className="btn btn-outline" onClick={handleSubscribe}>
-              🔕 Notify me when late
-            </button>
-          )
+            )}
+          </div>
         )}
       </div>
       {pushMsg && <div className="push-msg">{pushMsg}</div>}
 
       <div className="status">
-        {loading && <span>Loading…</span>}
-        {error && <span className="err">Error: {error}</span>}
+        {loading && <span>Reading the board…</span>}
+        {error && <span className="err">Signal lost — {error}</span>}
         {data && !error && (
           <span>
-            {filterMine && showMineToggle
-              ? <>{visible} of {total} delayed (your routes) · </>
-              : <>{total} delayed {total === 1 ? "trip" : "trips"} · </>}
-            updated {ageString(data.computedAt)} · auto-refresh 30s
+            {filterMine && showMineToggle ? (
+              <><span className="num">{visible}</span> of <span className="num">{total}</span> · your routes</>
+            ) : (
+              <><span className="num">{total}</span> {total === 1 ? "trip" : "trips"} delayed</>
+            )}
+            {" · "}updated {ageString(data.computedAt)}
           </span>
         )}
       </div>
@@ -303,26 +350,35 @@ export default function App() {
           {filterMine && showMineToggle ? (
             <>
               <strong>Your routes are on time.</strong>
-              <p>None of your saved routes are 5+ minutes behind right now.</p>
+              <p>Nothing you've saved is running behind right now.</p>
             </>
           ) : (
             <>
-              <strong>Everything's on time.</strong>
-              <p>No CapMetro trips are running 5+ minutes behind schedule right now.</p>
+              <strong>The board is clear.</strong>
+              <p>No CapMetro trips currently 5+ minutes behind schedule.</p>
             </>
           )}
         </div>
       )}
 
+      {data && visible > 0 && (
+        <div className="section-label">
+          <span>{filterMine && showMineToggle ? "Your routes" : "All routes"}</span>
+          <span className="count">· {grouped.length}</span>
+        </div>
+      )}
+
       <div className="routes">
         {grouped.map(g => (
-          <section key={g.route} className="route-card">
+          <section key={g.route} className={`route-card ${severityClass(g.worstMin)}`}>
             <div className="route-head">
               <span className="route-badge">{g.route}</span>
               <div className="route-head-info">
                 <div className="route-long">{g.longName}</div>
                 <div className="route-sub">
-                  {g.delays.length} delayed · worst {g.worstMin} min late
+                  {g.delays.length} {g.delays.length === 1 ? "trip" : "trips"}
+                  <span className="sep">·</span>
+                  worst {g.worstMin} min
                 </div>
               </div>
               {patterns && patterns.routes[g.routeId] >= 2 && (
@@ -330,27 +386,33 @@ export default function App() {
                   className="pattern-badge"
                   title={`Late on ${patterns.routes[g.routeId]} of the last ${patterns.windowDays} days (≥${patterns.minSnapshotsPerDay} late readings per day)`}
                 >
-                  late {patterns.routes[g.routeId]}/{patterns.windowDays}d
+                  {patterns.routes[g.routeId]}/{patterns.windowDays}d
                 </span>
               )}
             </div>
             <ul className="delays">
               {g.delays.map(d => {
                 const v = votesFor(d);
-                const total = v.showed + v.missed;
+                const voteTotal = v.showed + v.missed;
                 return (
                   <li key={d.tripId}>
-                    <span className={`pill ${d.delayMin >= 15 ? "severe" : d.delayMin >= 10 ? "warn" : ""}`}>
-                      +{d.delayMin} min
+                    <span className={`pill ${severityClass(d.delayMin)} tabular`}>
+                      +{d.delayMin}<span className="min">min</span>
                     </span>
                     <div className="stop-info">
                       <div className="stop-name">
-                        {savedStopIds.has(d.nextStopId) && <span className="your-stop-badge" title="Your saved stop">📍</span>}
-                        → {d.nextStopName}
+                        {savedStopIds.has(d.nextStopId) && (
+                          <span className="your-stop-badge" title="A stop you've saved">★ Your stop</span>
+                        )}
+                        <span className="arrow">→</span>
+                        {d.nextStopName}
                       </div>
-                      <div className="stop-times">
-                        sched {formatClock(d.scheduledArrival)} · now expected {formatClock(d.predictedArrival)}
-                        {d.vehicleId && <> · bus #{d.vehicleId}</>}
+                      <div className="stop-times tabular">
+                        <span className="key">SCHED</span><span className="val">{formatClock(d.scheduledArrival)}</span>
+                        <span className="key" style={{ marginLeft: 12 }}>NOW</span><span className="val">{formatClock(d.predictedArrival)}</span>
+                        {d.vehicleId && (
+                          <span className="vehicle" style={{ marginLeft: 12 }}>#{d.vehicleId}</span>
+                        )}
                       </div>
                       <div className="vote-row">
                         <button
@@ -359,7 +421,7 @@ export default function App() {
                           aria-pressed={v.myVote === "showed"}
                           title="The bus actually showed up"
                         >
-                          👍 Showed
+                          Showed up
                         </button>
                         <button
                           className={`vote-btn ${v.myVote === "missed" ? "on bad" : ""}`}
@@ -367,9 +429,9 @@ export default function App() {
                           aria-pressed={v.myVote === "missed"}
                           title="Bus never came / ghost bus"
                         >
-                          👎 No-show
+                          No-show
                         </button>
-                        {total > 0 && (
+                        {voteTotal > 0 && (
                           <span className="vote-tally">
                             {v.showed} showed · {v.missed} no-show
                           </span>
@@ -384,8 +446,9 @@ export default function App() {
         ))}
       </div>
 
-      <footer>
-        Data: CapMetro via data.texas.gov · refreshes every 30s · delay = predicted minus scheduled arrival at next stop
+      <footer className="app-footer">
+        <div className="sig">A live board for Austin riders.</div>
+        <div>Data: CapMetro via data.texas.gov · refresh 30s · delay = predicted − scheduled at next stop</div>
       </footer>
 
       <RoutePicker

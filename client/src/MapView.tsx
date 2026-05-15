@@ -84,9 +84,15 @@ export default function MapView({ filterRouteIds, onClose }: Props) {
   return (
     <div className="map-page">
       <div className="map-bar">
-        <button className="btn btn-outline" onClick={onClose}>← Back to list</button>
+        <button className="btn btn-outline" onClick={onClose}>← Board</button>
+        <span className="title">Map</span>
         <span className="map-status">
-          {data ? `${visible.length} vehicles · ${delayedCount} late` : "Loading…"}
+          {data ? (
+            <>
+              <span className="num">{visible.length}</span> vehicles
+              {" · "}<span className="num">{delayedCount}</span> late
+            </>
+          ) : "Loading…"}
         </span>
         <label className="toggle">
           <input

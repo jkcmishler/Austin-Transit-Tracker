@@ -1,2 +1,69 @@
-html, body, #root { height: 100%; }
-body { margin: 0; }
+:root {
+  /* ---- palette: sodium lamp on indigo midnight ---- */
+  --bg: #0a0c12;
+  --bg-2: #11141d;
+  --bg-3: #181c27;
+  --rule: #232733;
+  --rule-soft: #1c1f29;
+
+  --ink: #e8e3d4;          /* warm paper-white */
+  --ink-dim: #9c9685;       /* warm muted */
+  --ink-ghost: #5b5849;     /* deeply muted */
+
+  --amber: #ffc857;         /* departure board */
+  --amber-glow: rgba(255, 200, 87, 0.22);
+  --amber-deep: #f0a020;
+
+  --warn: #ff9c42;          /* 10-14 min late */
+  --severe: #ff5e3a;        /* 15+ min late, sodium red */
+  --severe-glow: rgba(255, 94, 58, 0.22);
+
+  --ok: #8dd17a;            /* hill country jade */
+
+  --serif: "Fraunces", "Times New Roman", Georgia, serif;
+  --mono:  "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+body {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "tnum" 1, "ss01" 1, "calt" 0;
+  text-rendering: optimizeLegibility;
+
+  /* Subtle grain over the deep indigo, like newsprint */
+  background-image:
+    radial-gradient(circle at 20% 0%, rgba(255, 200, 87, 0.06), transparent 50%),
+    radial-gradient(circle at 80% 110%, rgba(255, 94, 58, 0.04), transparent 50%);
+}
+
+/* Decorative grain overlay — barely perceptible, gives the board "tactility" */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.35;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.95   0 0 0 0 0.85   0 0 0 0 0.55   0 0 0 0.025 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  mix-blend-mode: overlay;
+}
+
+a { color: var(--amber); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+::selection { background: var(--amber); color: var(--bg); }
+
+/* Force tabular numerals across the board so digits stay column-aligned */
+.tabular { font-variant-numeric: tabular-nums; }
