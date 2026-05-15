@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import "./App.css";
+import RoutePicker from "./RoutePicker";
+import { loadSavedRoutes, saveSavedRoutes } from "./savedRoutes";
 
 type Delay = {
   tripId: string;
@@ -41,6 +43,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [, setTick] = useState(0);
+  const [savedRoutes, setSavedRoutes] = useState<Set<string>>(() => loadSavedRoutes());
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [filterMine, setFilterMine] = useState(() => loadSavedRoutes().size > 0);
+
+  useEffect(() => { saveSavedRoutes(savedRoutes); }, [savedRoutes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,10 +76,17 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  const grouped = useMemo(() => {
+  const visibleItems = useMemo(() => {
     if (!data) return [];
+    if (filterMine && savedRoutes.size > 0) {
+      return data.items.filter(d => savedRoutes.has(d.routeId));
+    }
+    return data.items;
+  }, [data, filterMine, savedRoutes]);
+
+  const grouped = useMemo(() => {
     const byRoute = new Map<string, Delay[]>();
-    for (const d of data.items) {
+    for (const d of visibleItems) {
       const key = d.routeShortName || d.routeId;
       const arr = byRoute.get(key) || [];
       arr.push(d);
@@ -86,7 +100,11 @@ export default function App() {
         worstMin: delays[0].delayMin,
       }))
       .sort((a, b) => b.worstMin - a.worstMin);
-  }, [data]);
+  }, [visibleItems]);
+
+  const showMineToggle = savedRoutes.size > 0;
+  const visible = visibleItems.length;
+  const total = data?.items.length ?? 0;
 
   return (
     <div className="app">
@@ -95,21 +113,48 @@ export default function App() {
         <p className="tagline">CapMetro buses & trains running 5+ minutes late, right now</p>
       </header>
 
+      <div className="toolbar">
+        <button className="btn" onClick={() => setPickerOpen(true)}>
+          {savedRoutes.size === 0 ? "Pick your routes" : `My routes (${savedRoutes.size})`}
+        </button>
+        {showMineToggle && (
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={filterMine}
+              onChange={e => setFilterMine(e.target.checked)}
+            />
+            Show only mine
+          </label>
+        )}
+      </div>
+
       <div className="status">
         {loading && <span>Loading…</span>}
         {error && <span className="err">Error: {error}</span>}
         {data && !error && (
           <span>
-            {data.items.length} delayed {data.items.length === 1 ? "trip" : "trips"} ·
+            {filterMine && showMineToggle
+              ? <>{visible} of {total} delayed (your routes) · </>
+              : <>{total} delayed {total === 1 ? "trip" : "trips"} · </>}
             updated {ageString(data.computedAt)} · auto-refresh 30s
           </span>
         )}
       </div>
 
-      {data && data.items.length === 0 && !error && (
+      {data && visible === 0 && !error && (
         <div className="empty">
-          <strong>Everything's on time.</strong>
-          <p>No CapMetro trips are running 5+ minutes behind schedule right now.</p>
+          {filterMine && showMineToggle ? (
+            <>
+              <strong>Your routes are on time.</strong>
+              <p>None of your saved routes are 5+ minutes behind right now.</p>
+            </>
+          ) : (
+            <>
+              <strong>Everything's on time.</strong>
+              <p>No CapMetro trips are running 5+ minutes behind schedule right now.</p>
+            </>
+          )}
         </div>
       )}
 
@@ -148,6 +193,17 @@ export default function App() {
       <footer>
         Data: CapMetro via data.texas.gov · refreshes every 30s · delay = predicted minus scheduled arrival at next stop
       </footer>
+
+      <RoutePicker
+        open={pickerOpen}
+        selected={savedRoutes}
+        onClose={() => setPickerOpen(false)}
+        onChange={(next) => {
+          setSavedRoutes(next);
+          if (next.size === 0) setFilterMine(false);
+          else if (!filterMine) setFilterMine(true);
+        }}
+      />
     </div>
   );
 }

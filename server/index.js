@@ -197,6 +197,25 @@ app.get("/api/delays", (_req, res) => {
   });
 });
 
+app.get("/api/routes", (_req, res) => {
+  // Natural-sort by shortName so "1", "2", "10" come out as 1, 2, 10 (not 1, 10, 2).
+  const items = [...routesById.entries()].map(([id, r]) => ({
+    routeId: id,
+    shortName: r.shortName,
+    longName: r.longName,
+    type: r.type,
+  }));
+  items.sort((a, b) => {
+    const an = Number(a.shortName), bn = Number(b.shortName);
+    const aNum = !Number.isNaN(an), bNum = !Number.isNaN(bn);
+    if (aNum && bNum) return an - bn;
+    if (aNum) return -1;
+    if (bNum) return 1;
+    return a.shortName.localeCompare(b.shortName);
+  });
+  res.json({ items });
+});
+
 async function start() {
   await loadStaticGtfs();
   await refreshDelays();
