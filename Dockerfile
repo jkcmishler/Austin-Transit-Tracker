@@ -2,7 +2,7 @@
 FROM node:24-alpine AS client-build
 WORKDIR /app/client
 COPY client/package.json client/package-lock.json ./
-RUN npm ci
+RUN npm install --no-audit --no-fund
 COPY client ./
 RUN npm run build
 
@@ -12,7 +12,7 @@ WORKDIR /app/server
 # better-sqlite3 needs build tools to compile against this image's Node version
 RUN apk add --no-cache python3 make g++
 COPY server/package.json server/package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev --no-audit --no-fund
 
 # --- stage 3: final runtime image ---
 FROM node:24-alpine
