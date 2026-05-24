@@ -14,13 +14,6 @@ db.function("chicago_day", { deterministic: true }, (epochSec) =>
   chicagoYmdFromEpochSec(epochSec)
 );
 
-// Migrate: add stop_ids column to push_subscriptions if it doesn't exist
-// (for databases created before this column was part of the CREATE TABLE).
-const subCols = db.prepare("PRAGMA table_info(push_subscriptions)").all();
-if (!subCols.some(c => c.name === "stop_ids")) {
-  db.exec(`ALTER TABLE push_subscriptions ADD COLUMN stop_ids TEXT NOT NULL DEFAULT '[]'`);
-}
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,3 +60,9 @@ db.exec(`
     PRIMARY KEY (trip_id, device_id)
   );
 `);
+
+// Migrate older databases that pre-date the stop_ids column.
+const subCols = db.prepare("PRAGMA table_info(push_subscriptions)").all();
+if (!subCols.some(c => c.name === "stop_ids")) {
+  db.exec(`ALTER TABLE push_subscriptions ADD COLUMN stop_ids TEXT NOT NULL DEFAULT '[]'`);
+}
