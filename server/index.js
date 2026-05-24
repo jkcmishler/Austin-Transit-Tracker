@@ -22,9 +22,16 @@ if (PUSH_ENABLED) {
 }
 
 const PORT = process.env.PORT || 4000;
+
+// Data source: CapMetro GTFS via Texas Open Data Portal (data.texas.gov).
+// Used under CapMetro's open data license: https://www.capmetro.org/developertools
+// Do not use CapMetro trademarks/branding in association with this data.
 const TRIP_UPDATES_URL = "https://data.texas.gov/download/mqtr-wwpy/application%2Foctet-stream";
 const VEHICLE_POSITIONS_URL = "https://data.texas.gov/download/cuc7-ywmd/application%2Foctet-stream";
 const STATIC_GTFS_URL = "https://data.texas.gov/download/r4v4-vz24/application%2Fzip";
+const FETCH_OPTIONS = {
+  headers: { "User-Agent": "austin-transit-tracker (contact: jkcorleymishler@gmail.com)" },
+};
 const TRIP_UPDATES_REFRESH_MS = 30_000;
 const STATIC_GTFS_REFRESH_MS = 6 * 60 * 60 * 1000; // 6h
 const DELAY_THRESHOLD_SEC = 5 * 60; // 5 minutes
@@ -77,7 +84,7 @@ function hmsToSec(hms) {
 
 async function loadStaticGtfs() {
   console.log("Fetching static GTFS schedule…");
-  const resp = await fetch(STATIC_GTFS_URL);
+  const resp = await fetch(STATIC_GTFS_URL, FETCH_OPTIONS);
   if (!resp.ok) throw new Error(`GTFS fetch ${resp.status}`);
   const buf = Buffer.from(await resp.arrayBuffer());
   const zip = new AdmZip(buf);
@@ -123,7 +130,7 @@ const startOfTripDay = startOfChicagoDayFromYmd;
 
 async function refreshDelays() {
   try {
-    const resp = await fetch(TRIP_UPDATES_URL);
+    const resp = await fetch(TRIP_UPDATES_URL, FETCH_OPTIONS);
     if (!resp.ok) throw new Error(`trip-updates ${resp.status}`);
     const feed = await resp.json();
     const now = Math.floor(Date.now() / 1000);
@@ -205,7 +212,7 @@ async function refreshDelays() {
 
 async function refreshVehicles() {
   try {
-    const resp = await fetch(VEHICLE_POSITIONS_URL);
+    const resp = await fetch(VEHICLE_POSITIONS_URL, FETCH_OPTIONS);
     if (!resp.ok) throw new Error(`vehicle-positions ${resp.status}`);
     const feed = await resp.json();
     // Build a tripId -> delay map from the most recent cachedDelays so we can mark

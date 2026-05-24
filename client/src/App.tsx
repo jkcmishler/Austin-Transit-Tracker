@@ -449,6 +449,11 @@ export default function App() {
       <footer className="app-footer">
         <div className="sig">A live board for Austin riders.</div>
         <div>Data: CapMetro via data.texas.gov · refresh 30s · delay = predicted − scheduled at next stop</div>
+        <div style={{ fontSize: "0.75rem", opacity: 0.6, marginTop: "0.5rem", lineHeight: 1.4 }}>
+          Transit data provided by CapMetro via the Texas Open Data Portal (data.texas.gov).
+          This app is not affiliated with, endorsed by, or sponsored by CapMetro.
+          Data is provided "as is" with no guarantee of accuracy or availability.
+        </div>
       </footer>
 
       <RoutePicker
